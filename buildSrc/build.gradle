@@ -1,13 +1,19 @@
 plugins {
 	id "java-gradle-plugin"
-	id "io.spring.javaformat" version "${javaFormatVersion}"
+	//id "io.spring.javaformat" version "${javaFormatVersion}"
 	id "checkstyle"
 }
 
 repositories {
+	//加上阿里云镜像
+	mavenLocal()
+	maven { url 'https://maven.aliyun.com/nexus/content/groups/public/' }
+	maven { url 'https://maven.aliyun.com/nexus/content/repositories/jcenter' }
+	maven { url "https://maven.aliyun.com/nexus/content/groups/public/gradle-plugin" }
 	mavenCentral()
 	gradlePluginPortal()
 	maven { url "https://repo.spring.io/release" }
+
 }
 
 sourceCompatibility = 1.8

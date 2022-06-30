@@ -18,6 +18,8 @@ package org.springframework.boot.context.config;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -108,6 +110,7 @@ import org.springframework.util.StringUtils;
  * @author Andy Wilkinson
  * @author Eddú Meléndez
  * @author Madhura Bhave
+ * @author Scott Frederick
  * @since 1.0.0
  */
 public class ConfigFileApplicationListener implements EnvironmentPostProcessor, SmartApplicationListener, Ordered {
@@ -182,21 +185,28 @@ public class ConfigFileApplicationListener implements EnvironmentPostProcessor, 
 				|| ApplicationPreparedEvent.class.isAssignableFrom(eventType);
 	}
 
+	/**
+	 * 加载默认配置 application.properties/yml 等配置文件
+	 */
 	@Override
 	public void onApplicationEvent(ApplicationEvent event) {
+		// 触发【环境准备完毕】事件 (解析配置文件)
 		if (event instanceof ApplicationEnvironmentPreparedEvent) {
 			onApplicationEnvironmentPreparedEvent((ApplicationEnvironmentPreparedEvent) event);
 		}
+		// 触发【容器准备完毕】事件 (重置 defaultProperties 优先级最低)
 		if (event instanceof ApplicationPreparedEvent) {
 			onApplicationPreparedEvent(event);
 		}
 	}
 
 	private void onApplicationEnvironmentPreparedEvent(ApplicationEnvironmentPreparedEvent event) {
+		// 获取环境前置处理器
 		List<EnvironmentPostProcessor> postProcessors = loadPostProcessors();
 		postProcessors.add(this);
 		AnnotationAwareOrderComparator.sort(postProcessors);
 		for (EnvironmentPostProcessor postProcessor : postProcessors) {
+			// 环境处理器分别处理
 			postProcessor.postProcessEnvironment(event.getEnvironment(), event.getSpringApplication());
 		}
 	}
@@ -207,11 +217,13 @@ public class ConfigFileApplicationListener implements EnvironmentPostProcessor, 
 
 	@Override
 	public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
+		// 环境配置前置处理器进行配置文件添加
 		addPropertySources(environment, application.getResourceLoader());
 	}
 
 	private void onApplicationPreparedEvent(ApplicationEvent event) {
 		this.logger.switchTo(ConfigFileApplicationListener.class);
+		// 添加 BeanFactory 前置执行器
 		addPostProcessors(((ApplicationPreparedEvent) event).getApplicationContext());
 	}
 
@@ -223,6 +235,7 @@ public class ConfigFileApplicationListener implements EnvironmentPostProcessor, 
 	 */
 	protected void addPropertySources(ConfigurableEnvironment environment, ResourceLoader resourceLoader) {
 		RandomValuePropertySource.addToEnvironment(environment);
+		// 配置加载器进行加载
 		new Loader(environment, resourceLoader).load();
 	}
 
@@ -268,6 +281,7 @@ public class ConfigFileApplicationListener implements EnvironmentPostProcessor, 
 	}
 
 	/**
+	 * 重置 defaultProperties 优先级到最低
 	 * {@link BeanFactoryPostProcessor} to re-order our property sources below any
 	 * {@code @PropertySource} items added by the {@link ConfigurationClassPostProcessor}.
 	 */
@@ -327,10 +341,16 @@ public class ConfigFileApplicationListener implements EnvironmentPostProcessor, 
 			this.environment = environment;
 			this.placeholdersResolver = new PropertySourcesPlaceholdersResolver(this.environment);
 			this.resourceLoader = (resourceLoader != null) ? resourceLoader : new DefaultResourceLoader(null);
+			// 文件 application 配置文件的资源加载器, 包括 properties/xml/yml/yaml 扩展名
+			// 从 spring.factories 中加载 PropertySourceLoader 接⼝的具体实现类, 默认有两个实现类
+			// PropertiesPropertySourceLoader, 用于加载 properties/xml 格式的配置文件
+			// YamlPropertySourceLoader, 用于加载 yml/yaml 格式的配置文件
+			// nacos会在这里再置入两个实现类, NacosXmlPropertySourceLoader/NacosJsonPropertySourceLoader 且 优先级高于默认的实现类
 			this.propertySourceLoaders = SpringFactoriesLoader.loadFactories(PropertySourceLoader.class,
 					getClass().getClassLoader());
 		}
 
+		// 加载配置文件
 		void load() {
 			FilteredPropertySource.apply(this.environment, DEFAULT_PROPERTIES, LOAD_FILTERED_PROPERTY,
 					(defaultProperties) -> {
@@ -338,18 +358,26 @@ public class ConfigFileApplicationListener implements EnvironmentPostProcessor, 
 						this.processedProfiles = new LinkedList<>();
 						this.activatedProfiles = false;
 						this.loaded = new LinkedHashMap<>();
+						// 初始化 profiles
 						initializeProfiles();
 						while (!this.profiles.isEmpty()) {
 							Profile profile = this.profiles.poll();
+							// 是否是默认 profile
 							if (isDefaultProfile(profile)) {
 								addProfileToEnvironment(profile.getName());
 							}
+							// 加载 profile (首先拿到的是 profile=null, 会直接进入该方法加载配置文件)
+							// addToLoaded(MutablePropertySources::addLast, false) 获取一个 consumer, 用来回调处理配置文件Document对象
+							// 	将配置文件(propertySource)优先级置入最后
 							load(profile, this::getPositiveProfileFilter,
 									addToLoaded(MutablePropertySources::addLast, false));
 							this.processedProfiles.add(profile);
 						}
+						// 再次加载默认配置文件 (getNegativeProfileFilter() 和 getPositiveProfileFilter() 的区别)
 						load(null, this::getNegativeProfileFilter, addToLoaded(MutablePropertySources::addFirst, true));
+						// 添加所有的 properties 到 environment
 						addLoadedPropertySources();
+						// 应用激活的 profile
 						applyActiveProfiles(defaultProperties);
 					});
 		}
@@ -362,8 +390,10 @@ public class ConfigFileApplicationListener implements EnvironmentPostProcessor, 
 		private void initializeProfiles() {
 			// The default profile for these purposes is represented as null. We add it
 			// first so that it is processed first and has lowest priority.
+			// 第一个 profile 为 null, 这样能保证首个加载 application.properties/yml
 			this.profiles.add(null);
 			Binder binder = Binder.get(this.environment);
+			// 通过启动参数获取激活的、包含的、以及其他 profile
 			Set<Profile> activatedViaProperty = getProfiles(binder, ACTIVE_PROFILES_PROPERTY);
 			Set<Profile> includedViaProperty = getProfiles(binder, INCLUDE_PROFILES_PROPERTY);
 			List<Profile> otherActiveProfiles = getOtherActiveProfiles(activatedViaProperty, includedViaProperty);
@@ -372,6 +402,9 @@ public class ConfigFileApplicationListener implements EnvironmentPostProcessor, 
 			// System properties) take precedence over those added in config files.
 			this.profiles.addAll(includedViaProperty);
 			addActiveProfiles(activatedViaProperty);
+			// 无额外配置 profile 时, 使用默认
+			// 这里的没有配置并不是指 applicatio n配置文件中没有配置, 而是命令行、获取 main 方法传入等其他方法配置
+			// 我们并未配置任何 active 的 profile, 这里或产生这样的数据 profiles=[null, "default"]
 			if (this.profiles.size() == 1) { // only has null profile
 				for (String defaultProfileName : this.environment.getDefaultProfiles()) {
 					Profile defaultProfile = new Profile(defaultProfileName, true);
@@ -381,7 +414,7 @@ public class ConfigFileApplicationListener implements EnvironmentPostProcessor, 
 		}
 
 		private List<Profile> getOtherActiveProfiles(Set<Profile> activatedViaProperty,
-				Set<Profile> includedViaProperty) {
+													 Set<Profile> includedViaProperty) {
 			return Arrays.stream(this.environment.getActiveProfiles()).map(Profile::new).filter(
 					(profile) -> !activatedViaProperty.contains(profile) && !includedViaProperty.contains(profile))
 					.collect(Collectors.toList());
@@ -402,6 +435,7 @@ public class ConfigFileApplicationListener implements EnvironmentPostProcessor, 
 				this.logger.debug("Activated activeProfiles " + StringUtils.collectionToCommaDelimitedString(profiles));
 			}
 			this.activatedProfiles = true;
+			// 移除 default
 			removeUnprocessedDefaultProfiles();
 		}
 
@@ -411,22 +445,30 @@ public class ConfigFileApplicationListener implements EnvironmentPostProcessor, 
 
 		private DocumentFilter getPositiveProfileFilter(Profile profile) {
 			return (Document document) -> {
+				// 当前环境变量是空, 返回true, 表示需要配置环境环境变量 profile=[null, default]
+				// 先读取 application 等默认配置文件, 查看是否有环境变量 profile 需要配置
 				if (profile == null) {
 					return ObjectUtils.isEmpty(document.getProfiles());
 				}
+				// 环境变量profile不为空(可能为系统默认 default, 或自己在配置文件application等配置好的 dev)
+				// 判断配置文件中的环境变量是否已经包含了当前环境变量 且 是否包含已经激活的环境变量
 				return ObjectUtils.containsElement(document.getProfiles(), profile.getName())
 						&& this.environment.acceptsProfiles(Profiles.of(document.getProfiles()));
 			};
 		}
 
 		private DocumentFilter getNegativeProfileFilter(Profile profile) {
-			return (Document document) -> (profile == null && !ObjectUtils.isEmpty(document.getProfiles())
-					&& this.environment.acceptsProfiles(Profiles.of(document.getProfiles())));
+			return (Document document) -> (
+					// 当前环境变量为空 并且 配置文件中环境变量不为空 并且 包含已经激活的环境变量
+					profile == null && !ObjectUtils.isEmpty(document.getProfiles())
+							&& this.environment.acceptsProfiles(Profiles.of(document.getProfiles()))
+			);
 		}
 
 		private DocumentConsumer addToLoaded(BiConsumer<MutablePropertySources, PropertySource<?>> addMethod,
-				boolean checkForExisting) {
+											 boolean checkForExisting) {
 			return (profile, document) -> {
+				// 是否校验存在
 				if (checkForExisting) {
 					for (MutablePropertySources merged : this.loaded.values()) {
 						if (merged.contains(document.getPropertySource().getName())) {
@@ -436,23 +478,29 @@ public class ConfigFileApplicationListener implements EnvironmentPostProcessor, 
 				}
 				MutablePropertySources merged = this.loaded.computeIfAbsent(profile,
 						(k) -> new MutablePropertySources());
+				// 将配置文件优先级置入最后
 				addMethod.accept(merged, document.getPropertySource());
 			};
 		}
 
 		private void load(Profile profile, DocumentFilterFactory filterFactory, DocumentConsumer consumer) {
+			// 获取并遍历所有待搜索的位置
 			getSearchLocations().forEach((location) -> {
 				boolean isDirectory = location.endsWith("/");
+				// 如果是目录, 获取所有待加载的配置文件名(默认为application); 如果不是目录, 放入 null
 				Set<String> names = isDirectory ? getSearchNames() : NO_SEARCH_NAMES;
+				// 加载每个位置的配置文件
 				names.forEach((name) -> load(location, name, profile, filterFactory, consumer));
 			});
 		}
 
 		private void load(String location, String name, Profile profile, DocumentFilterFactory filterFactory,
-				DocumentConsumer consumer) {
+						  DocumentConsumer consumer) {
+			// 无配置文件名称、location 直接对应文件
 			if (!StringUtils.hasText(name)) {
 				for (PropertySourceLoader loader : this.propertySourceLoaders) {
 					if (canLoadFileExtension(loader, location)) {
+						// 通过 location 加载文件
 						load(loader, location, profile, filterFactory.getDocumentFilter(profile), consumer);
 						return;
 					}
@@ -461,10 +509,14 @@ public class ConfigFileApplicationListener implements EnvironmentPostProcessor, 
 						+ "' is not known to any PropertySourceLoader. If the location is meant to reference "
 						+ "a directory, it must end in '/'");
 			}
+			// 分别扫描对应 location 目录下的配置文件
 			Set<String> processed = new HashSet<>();
+			// 获取配置类加载器 (PropertiesPropertySourceLoader、YamlPropertySourceLoader) 分别进行加载
 			for (PropertySourceLoader loader : this.propertySourceLoaders) {
+				// 分别获取文件扩展名(properties、xml、yml、yaml)
 				for (String fileExtension : loader.getFileExtensions()) {
 					if (processed.add(fileExtension)) {
+						// 加载具体的配置文件
 						loadForFileExtension(loader, location + name, "." + fileExtension, profile, filterFactory,
 								consumer);
 					}
@@ -478,15 +530,22 @@ public class ConfigFileApplicationListener implements EnvironmentPostProcessor, 
 		}
 
 		private void loadForFileExtension(PropertySourceLoader loader, String prefix, String fileExtension,
-				Profile profile, DocumentFilterFactory filterFactory, DocumentConsumer consumer) {
+										  Profile profile, DocumentFilterFactory filterFactory, DocumentConsumer consumer) {
+			// 获取默认环境文件过滤器
 			DocumentFilter defaultFilter = filterFactory.getDocumentFilter(null);
+			// 获取指定环境文件过滤器
 			DocumentFilter profileFilter = filterFactory.getDocumentFilter(profile);
+			// profile 非空
+			// profile=[null, "dev", "prod"]
+			// profile=[null, "defualt"]
 			if (profile != null) {
 				// Try profile-specific file & profile section in profile file (gh-340)
+				// 尝试加载指定环境配置文件: application-default.properties/bootstrap-default.properties
 				String profileSpecificFile = prefix + "-" + profile + fileExtension;
 				load(loader, profileSpecificFile, profile, defaultFilter, consumer);
 				load(loader, profileSpecificFile, profile, profileFilter, consumer);
 				// Try profile specific sections in files we've already processed
+				// 尝试加载已经执行了的环境配置
 				for (Profile processedProfile : this.processedProfiles) {
 					if (processedProfile != null) {
 						String previouslyLoaded = prefix + "-" + processedProfile + fileExtension;
@@ -495,11 +554,14 @@ public class ConfigFileApplicationListener implements EnvironmentPostProcessor, 
 				}
 			}
 			// Also try the profile-specific section (if any) of the normal file
+			// 加载常规的配置文件  application.properties/bootstrap.properties
+			// 由于首次进来的 profile = null, profileFilter = defaultFilter
 			load(loader, prefix + fileExtension, profile, profileFilter, consumer);
 		}
 
 		private void load(PropertySourceLoader loader, String location, Profile profile, DocumentFilter filter,
-				DocumentConsumer consumer) {
+						  DocumentConsumer consumer) {
+			// 获取资源
 			Resource[] resources = getResources(location);
 			for (Resource resource : resources) {
 				try {
@@ -519,7 +581,16 @@ public class ConfigFileApplicationListener implements EnvironmentPostProcessor, 
 						}
 						continue;
 					}
+					if (resource.isFile() && isPatternLocation(location) && hasHiddenPathElement(resource)) {
+						if (this.logger.isTraceEnabled()) {
+							StringBuilder description = getDescription("Skipped location with hidden path element ",
+									location, resource, profile);
+							this.logger.trace(description);
+						}
+						continue;
+					}
 					String name = "applicationConfig: [" + getLocationName(location, resource) + "]";
+					// 加载为 document 对象(调用加载器的 load 方法进行配置文件的加载)
 					List<Document> documents = loadDocuments(loader, name, resource);
 					if (CollectionUtils.isEmpty(documents)) {
 						if (this.logger.isTraceEnabled()) {
@@ -531,7 +602,13 @@ public class ConfigFileApplicationListener implements EnvironmentPostProcessor, 
 					}
 					List<Document> loaded = new ArrayList<>();
 					for (Document document : documents) {
+						// 文档是否匹配过滤器
 						if (filter.match(document)) {
+							// 默认的配置文件中 application/bootstrap添加配置 spring.profiles.active=dev
+							// 处理到默认配置文件时, 我们会通过解析配置文件新增一个 profile 到 profiles 中
+							// 	最初的 profiles=[null, "default"]; ⽽后, 我们消费了null, profiles=["default"].
+							// 	现在, 我们添加⼀个 profile="test"; 那么, profiles=["default", "test"]
+							//	⾏ removeUnprocessedDefaultProfiles, 将会移除default. 所以, 最终profiles=["test"].
 							addActiveProfiles(document.getActiveProfiles());
 							addIncludedProfiles(document.getIncludeProfiles());
 							loaded.add(document);
@@ -539,6 +616,7 @@ public class ConfigFileApplicationListener implements EnvironmentPostProcessor, 
 					}
 					Collections.reverse(loaded);
 					if (!loaded.isEmpty()) {
+						// 处理被加载的 document
 						loaded.forEach((document) -> consumer.accept(profile, document));
 						if (this.logger.isDebugEnabled()) {
 							StringBuilder description = getDescription("Loaded config file ", location, resource,
@@ -555,6 +633,16 @@ public class ConfigFileApplicationListener implements EnvironmentPostProcessor, 
 			}
 		}
 
+		private boolean hasHiddenPathElement(Resource resource) throws IOException {
+			String cleanPath = StringUtils.cleanPath(resource.getFile().getAbsolutePath());
+			for (Path value : Paths.get(cleanPath)) {
+				if (value.toString().startsWith("..")) {
+					return true;
+				}
+			}
+			return false;
+		}
+
 		private String getLocationName(String location, Resource resource) {
 			if (!location.contains("*")) {
 				return location;
@@ -567,7 +655,7 @@ public class ConfigFileApplicationListener implements EnvironmentPostProcessor, 
 
 		private Resource[] getResources(String location) {
 			try {
-				if (location.contains("*")) {
+				if (isPatternLocation(location)) {
 					return getResourcesFromPatternLocation(location);
 				}
 				return new Resource[] { this.resourceLoader.getResource(location) };
@@ -575,6 +663,10 @@ public class ConfigFileApplicationListener implements EnvironmentPostProcessor, 
 			catch (Exception ex) {
 				return EMPTY_RESOURCES;
 			}
+		}
+
+		private boolean isPatternLocation(String location) {
+			return location.contains("*");
 		}
 
 		private Resource[] getResourcesFromPatternLocation(String location) throws IOException {
@@ -670,10 +762,12 @@ public class ConfigFileApplicationListener implements EnvironmentPostProcessor, 
 
 		private Set<String> getSearchLocations() {
 			Set<String> locations = getSearchLocations(CONFIG_ADDITIONAL_LOCATION_PROPERTY);
+			// 自定义搜索位置 (配置 spring.config.location)
 			if (this.environment.containsProperty(CONFIG_LOCATION_PROPERTY)) {
 				locations.addAll(getSearchLocations(CONFIG_LOCATION_PROPERTY));
 			}
 			else {
+				// 默认搜索位置 classpath:/,classpath:/config/,file:./,file:./config/*/,file:./config/
 				locations.addAll(
 						asResolvedSet(ConfigFileApplicationListener.this.searchLocations, DEFAULT_SEARCH_LOCATIONS));
 			}
@@ -709,12 +803,14 @@ public class ConfigFileApplicationListener implements EnvironmentPostProcessor, 
 		}
 
 		private Set<String> getSearchNames() {
+			// 自定义配置文件 (配置 spring.config.name)
 			if (this.environment.containsProperty(CONFIG_NAME_PROPERTY)) {
 				String property = this.environment.getProperty(CONFIG_NAME_PROPERTY);
 				Set<String> names = asResolvedSet(property, null);
 				names.forEach(this::assertValidConfigName);
 				return names;
 			}
+			// 替换占位符 或 返回默认配置文件 application
 			return asResolvedSet(ConfigFileApplicationListener.this.names, DEFAULT_NAMES);
 		}
 
@@ -732,12 +828,15 @@ public class ConfigFileApplicationListener implements EnvironmentPostProcessor, 
 		private void addLoadedPropertySources() {
 			MutablePropertySources destination = this.environment.getPropertySources();
 			List<MutablePropertySources> loaded = new ArrayList<>(this.loaded.values());
+			// 反向排序(前置环境配置文件)
 			Collections.reverse(loaded);
 			String lastAdded = null;
 			Set<String> added = new HashSet<>();
 			for (MutablePropertySources sources : loaded) {
 				for (PropertySource<?> source : sources) {
+					// 去重
 					if (added.add(source.getName())) {
+						// 添加每个到 environment
 						addLoadedPropertySource(destination, lastAdded, source);
 						lastAdded = source.getName();
 					}
@@ -746,7 +845,7 @@ public class ConfigFileApplicationListener implements EnvironmentPostProcessor, 
 		}
 
 		private void addLoadedPropertySource(MutablePropertySources destination, String lastAdded,
-				PropertySource<?> source) {
+											 PropertySource<?> source) {
 			if (lastAdded == null) {
 				if (destination.contains(DEFAULT_PROPERTIES)) {
 					destination.addBefore(DEFAULT_PROPERTIES, source);
@@ -882,7 +981,7 @@ public class ConfigFileApplicationListener implements EnvironmentPostProcessor, 
 		private final Set<Profile> includeProfiles;
 
 		Document(PropertySource<?> propertySource, String[] profiles, Set<Profile> activeProfiles,
-				Set<Profile> includeProfiles) {
+				 Set<Profile> includeProfiles) {
 			this.propertySource = propertySource;
 			this.profiles = profiles;
 			this.activeProfiles = activeProfiles;
@@ -939,6 +1038,7 @@ public class ConfigFileApplicationListener implements EnvironmentPostProcessor, 
 
 	/**
 	 * Consumer used to handle a loaded {@link Document}.
+	 * 回调处理 Document
 	 */
 	@FunctionalInterface
 	private interface DocumentConsumer {

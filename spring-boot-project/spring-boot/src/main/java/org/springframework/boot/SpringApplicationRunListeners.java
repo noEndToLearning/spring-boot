@@ -49,6 +49,7 @@ class SpringApplicationRunListeners {
 	}
 
 	void environmentPrepared(ConfigurableEnvironment environment) {
+		// 负责分发事件的监听器
 		for (SpringApplicationRunListener listener : this.listeners) {
 			listener.environmentPrepared(environment);
 		}
@@ -85,7 +86,7 @@ class SpringApplicationRunListeners {
 	}
 
 	private void callFailedListener(SpringApplicationRunListener listener, ConfigurableApplicationContext context,
-			Throwable exception) {
+									Throwable exception) {
 		try {
 			listener.failed(context, exception);
 		}

@@ -1,0 +1,19 @@
+plugins {
+    id "java"
+    id "org.springframework.boot.conventions"
+    id "org.springframework.boot.integration-test"
+}
+
+description = "Spring Boot Deployment Tests"
+
+configurations {
+    providedRuntime {
+        extendsFrom dependencyManagement
+    }
+}
+
+dependencies {
+    implementation(project(":spring-boot-project:spring-boot-starters:spring-boot-starter-web")) {
+        exclude group: "org.hibernate.validator"
+    }
+}

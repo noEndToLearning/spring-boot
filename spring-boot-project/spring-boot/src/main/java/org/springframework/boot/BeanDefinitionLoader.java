@@ -78,12 +78,21 @@ class BeanDefinitionLoader {
 	BeanDefinitionLoader(BeanDefinitionRegistry registry, Object... sources) {
 		Assert.notNull(registry, "Registry must not be null");
 		Assert.notEmpty(sources, "Sources must not be empty");
+		//加载源
 		this.sources = sources;
+		//bean读取器
+		//读取通过注解配置的bean
 		this.annotatedReader = new AnnotatedBeanDefinitionReader(registry);
+		//读取通过xml配置的bean
 		this.xmlReader = new XmlBeanDefinitionReader(registry);
 		if (isGroovyPresent()) {
+			//读取通过groovy配置的bean
 			this.groovyReader = new GroovyBeanDefinitionReader(registry);
 		}
+		//bean扫描器, 通过配置Package进行扫描, 默认扫描注解
+		// 	org.springframework.stereotype.Component
+		//	javax.annotation.ManagedBean
+		//	javax.inject.Named
 		this.scanner = new ClassPathBeanDefinitionScanner(registry);
 		this.scanner.addExcludeFilter(new ClassExcludeFilter(sources));
 	}
@@ -123,6 +132,7 @@ class BeanDefinitionLoader {
 	 * @return the number of loaded beans
 	 */
 	int load() {
+		//计算加载源
 		int count = 0;
 		for (Object source : this.sources) {
 			count += load(source);
@@ -153,7 +163,9 @@ class BeanDefinitionLoader {
 			GroovyBeanDefinitionSource loader = BeanUtils.instantiateClass(source, GroovyBeanDefinitionSource.class);
 			load(loader);
 		}
+		//判断是不是合适的bean源
 		if (isEligible(source)) {
+			//注解读取器进行注解解析并注册
 			this.annotatedReader.register(source);
 			return 1;
 		}

@@ -1,0 +1,7 @@
+spring:
+  application:
+    name: mark
+  profiles:
+    active: test
+server:
+  port: 8081
